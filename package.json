@@ -1,14 +1,12 @@
 {
-  "name": "AI-DEV",
+  "name": "bridge-bot",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "dotenv": "^16.3.1",
     "node-telegram-bot-api": "^0.64.0",
-    "octokit": "^3.1.2",
-    "openai": "^4.20.1"
+    "octokit": "^3.1.2"
   }
 }
