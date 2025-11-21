@@ -73,7 +73,7 @@ bot.onText(/^\/list(?:\s+(.+))?$/i, async (msg, match) => {
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
         if (!Array.isArray(data)) return bot.sendMessage(msg.chat.id, `📄 นี่คือไฟล์ครับ (ใช้ /read เพื่ออ่าน)`);
-        
+
         let out = `📦 **Index of /${p}**\n\n`;
         data.forEach(i => {
             out += `${i.type === 'dir' ? '📁' : '📄'} ${i.name}\n`;
@@ -88,26 +88,39 @@ bot.onText(/^\/list(?:\s+(.+))?$/i, async (msg, match) => {
 bot.onText(/^\/read\s+(.+)$/i, async (msg, match) => {
     const p = match[1].trim();
     bot.sendMessage(msg.chat.id, `📖 กำลังอ่าน: ${p}...`);
+    
+    const tempFilePath = path.join('/tmp', path.basename(p));
+    
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
         if (!data.content) throw new Error("ไฟล์ใหญ่เกินไป หรือเป็นไฟล์ Binary");
-        
+
         const text = Buffer.from(data.content, 'base64').toString('utf8');
+        
+        // --- LOGIC แก้ไข: ส่งเป็น Document ถ้าไฟล์ยาว ---
         if (text.length > 3000) {
-            // ถ้าไฟล์ยาว ตัดส่งบางส่วน
-            bot.sendMessage(msg.chat.id, `\`\`\`\n${text.slice(0, 3000)}\n\`\`\`\n⚠️ (แสดงผลไม่ครบเพราะยาวเกินไป)`, { parse_mode: 'Markdown' });
+            fs.writeFileSync(tempFilePath, text);
+            await bot.sendDocument(msg.chat.id, tempFilePath, {
+                caption: `✅ แสดงผลไฟล์ไม่ครบในแชท: ${p} (ส่งเป็นเอกสารฉบับเต็ม)`
+            });
         } else {
+            // ส่งข้อความสั้นๆ ในแชท
             bot.sendMessage(msg.chat.id, `\`\`\`\n${text}\n\`\`\``, { parse_mode: 'Markdown' });
         }
+        // --- สิ้นสุด LOGIC แก้ไข ---
+        
     } catch (e) {
         bot.sendMessage(msg.chat.id, `❌ อ่านไม่ได้: ${e.message}`);
+    } finally {
+        // ลบไฟล์ชั่วคราวทิ้งเสมอ
+        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     }
 });
 
 // --- 4. คำสั่ง /checkall (ตรวจสอบ Repo) ---
 bot.onText(/^\/checkall$/i, async (msg) => {
     bot.sendMessage(msg.chat.id, "🔍 กำลังสแกนไฟล์ทั้งหมด (Recursive)...");
-    
+
     async function scan(dir) {
         let count = 0;
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: dir });
@@ -152,7 +165,7 @@ bot.onText(/^\/backup$/i, async (msg) => {
 
     try {
         fs.mkdirSync(tmpDir);
-        
+
         // ฟังก์ชันโหลดไฟล์ทั้งหมดมาลงเครื่องชั่วคราว
         async function downloadRecursive(dir) {
             const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: dir });
@@ -179,7 +192,7 @@ bot.onText(/^\/backup$/i, async (msg) => {
         zip.writeZip(zipPath);
 
         await bot.sendDocument(msg.chat.id, zipPath);
-        
+
     } catch (e) {
         bot.sendMessage(msg.chat.id, `❌ Backup Failed: ${e.message}`);
     } finally {
@@ -199,9 +212,9 @@ bot.on('document', async (msg) => {
     try {
         const fileLink = await bot.getFileLink(doc.file_id);
         await downloadFile(fileLink, tmpPath);
-        
+
         const content = fs.readFileSync(tmpPath, { encoding: 'base64' });
-        
+
         // หา SHA เดิม (ถ้ามี)
         let sha;
         try {
@@ -213,7 +226,7 @@ bot.on('document', async (msg) => {
             owner: GITHUB_OWNER, repo: GITHUB_REPO, path: `uploads/${fileName}`,
             message: `Upload ${fileName}`, content: content, sha: sha
         });
-        
+
         bot.sendMessage(msg.chat.id, `✅ อัปโหลดเสร็จสิ้น! อยู่ที่: uploads/${fileName}`);
     } catch (e) {
         bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
@@ -233,7 +246,7 @@ bot.on('message', async (msg) => {
         if (!filename || !content) return;
 
         bot.sendMessage(msg.chat.id, `🚀 กำลังเขียนไฟล์: ${filename}`);
-        
+
         let sha;
         try {
             const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: filename });
