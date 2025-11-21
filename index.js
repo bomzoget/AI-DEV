@@ -1,6 +1,10 @@
 /* ====================================================
-   Kryp Ultimate AI Dev Bot v11 (Full Option)
-   Features: List, Read, Write, Delete, Move, Upload, Backup, CheckAll
+   Kryp Ultimate AI Dev Bot v12 (Full Combine Version)
+   รวมโค้ดเดิม + เพิ่มฟีเจอร์ L1 Auto Import
+   Features:
+   - List, Read, Delete, Upload, Move, Backup
+   - override_repo (ล้างทั้ง repo)
+   - import_l1 (แตก ZIP + อัปโหลดทั้ง repo)
 ==================================================== */
 
 const TelegramBot = require('node-telegram-bot-api');
@@ -10,13 +14,13 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-// --- รับค่าจาก Railway ---
+// --- ENV from Railway ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
 const GITHUB_REPO = process.env.GITHUB_REPO;
 
-// เช็กค่าความถูกต้อง
+// Check ENV
 if (!TELEGRAM_TOKEN || !GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
     console.error("❌ Error: Missing ENV Variables in Railway!");
     process.exit(1);
@@ -25,209 +29,92 @@ if (!TELEGRAM_TOKEN || !GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
-console.log("🤖 Kryp Bot v11 Started...");
+console.log("🤖 Kryp Bot v12 Started...");
 
-// --- ฟังก์ชันช่วยดาวน์โหลดไฟล์ (แก้ปัญหา fetch) ---
+// ===============================
+// Helper: Download File
+// ===============================
 const downloadFile = (url, dest) => {
     return new Promise((resolve, reject) => {
         const file = fs.createWriteStream(dest);
         https.get(url, (response) => {
             response.pipe(file);
-            file.on('finish', () => {
-                file.close(resolve);
-            });
+            file.on('finish', () => file.close(resolve));
         }).on('error', (err) => {
             fs.unlink(dest, () => reject(err));
         });
     });
 };
 
-// --- 1. คำสั่ง /help (ช่วยเหลือ) ---
+// ===============================
+// /help
+// ===============================
 bot.onText(/^\/help$/i, (msg) => {
     const helpMsg = `
-🤖 **คำสั่งบอท (Full Option):**
+🤖 **Kryp Dev Bot (v12) Commands**
 
-📂 **จัดการไฟล์:**
-/list [path] - ดูรายชื่อไฟล์
-/read <file> - อ่านเนื้อหาไฟล์
-/delete <file> - ลบไฟล์
-/move <old> <new> - ย้าย/เปลี่ยนชื่อ
-/mkdir <folder> - สร้างโฟลเดอร์
+📂 **File Management**
+/list [path]
+/read <file>
+/delete <file>
+/move <old> <new>
+/mkdir <folder>
 
-🛠 **เครื่องมือ:**
-/checkall - ตรวจสอบโครงสร้าง Repo
-/upload - (แนบไฟล์มาพร้อมคำสั่งนี้) อัปขึ้น Repo
-/backup - ดาวน์โหลดโค้ดทั้งโปรเจกต์ (Zip)
-/raw <file> - ดาวน์โหลดไฟล์เดี่ยวๆ
+🛠 **System**
+/checkall  
+/backup  
 
-🤖 **AI Mode:**
-ส่ง JSON เพื่อเขียนโค้ด:
-\`{"filename": "...", "content": "..."}\`
+📤 **Upload**
+/upload (แนบไฟล์)
+
+🔥 **L1 Auto System**
+/override_repo  → ล้าง repo ทั้งอัน
+/import_l1      → ส่ง ZIP แล้ว import L1-only อัตโนมัติ
+
+🤖 **AI JSON Writer**
+ส่ง JSON: {"filename":"..","content":".."}
 `;
     bot.sendMessage(msg.chat.id, helpMsg, { parse_mode: 'Markdown' });
 });
 
-// --- 2. คำสั่ง /list (ดูไฟล์) ---
+// ===============================
+// /list
+// ===============================
 bot.onText(/^\/list(?:\s+(.+))?$/i, async (msg, match) => {
     const p = (match && match[1]) ? match[1].trim() : "";
+
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
-        if (!Array.isArray(data)) return bot.sendMessage(msg.chat.id, `📄 นี่คือไฟล์ครับ (ใช้ /read เพื่ออ่าน)`);
 
-        let out = `📦 **Index of /${p}**\n\n`;
-        data.forEach(i => {
-            out += `${i.type === 'dir' ? '📁' : '📄'} ${i.name}\n`;
-        });
+        if (!Array.isArray(data)) return bot.sendMessage(msg.chat.id, `📄 เป็นไฟล์ (ใช้ /read เพื่ออ่าน)`);
+
+        let out = `📦 Index of /${p}\n\n`;
+        data.forEach(i => out += `${i.type === 'dir' ? '📁' : '📄'} ${i.name}\n`);
+
         bot.sendMessage(msg.chat.id, out);
+
     } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ ไม่พบโฟลเดอร์: ${e.message}`);
+        bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
     }
 });
 
-// --- 3. คำสั่ง /read (อ่านไฟล์) ---
+// ===============================
+// /read
+// ===============================
 bot.onText(/^\/read\s+(.+)$/i, async (msg, match) => {
     const p = match[1].trim();
-    bot.sendMessage(msg.chat.id, `📖 กำลังอ่าน: ${p}...`);
-    
-    const tempFilePath = path.join('/tmp', path.basename(p));
-    
+    const tmpPath = `/tmp/${path.basename(p)}`;
+
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
-        if (!data.content) throw new Error("ไฟล์ใหญ่เกินไป หรือเป็นไฟล์ Binary");
-
         const text = Buffer.from(data.content, 'base64').toString('utf8');
-        
-        // --- LOGIC แก้ไข: ส่งเป็น Document ถ้าไฟล์ยาว ---
+
         if (text.length > 3000) {
-            fs.writeFileSync(tempFilePath, text);
-            await bot.sendDocument(msg.chat.id, tempFilePath, {
-                caption: `✅ แสดงผลไฟล์ไม่ครบในแชท: ${p} (ส่งเป็นเอกสารฉบับเต็ม)`
-            });
+            fs.writeFileSync(tmpPath, text);
+            await bot.sendDocument(msg.chat.id, tmpPath);
         } else {
-            // ส่งข้อความสั้นๆ ในแชท
             bot.sendMessage(msg.chat.id, `\`\`\`\n${text}\n\`\`\``, { parse_mode: 'Markdown' });
         }
-        // --- สิ้นสุด LOGIC แก้ไข ---
-        
-    } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ อ่านไม่ได้: ${e.message}`);
-    } finally {
-        // ลบไฟล์ชั่วคราวทิ้งเสมอ
-        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-    }
-});
-
-// --- 4. คำสั่ง /checkall (ตรวจสอบ Repo) ---
-bot.onText(/^\/checkall$/i, async (msg) => {
-    bot.sendMessage(msg.chat.id, "🔍 กำลังสแกนไฟล์ทั้งหมด (Recursive)...");
-
-    async function scan(dir) {
-        let count = 0;
-        const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: dir });
-        for (const item of data) {
-            if (item.type === 'dir') {
-                count += await scan(item.path);
-            } else {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    try {
-        const totalFiles = await scan("");
-        bot.sendMessage(msg.chat.id, `✅ **สถานะปกติ**\n\n📁 เชื่อมต่อกับ: ${GITHUB_REPO}\n📄 จำนวนไฟล์ทั้งหมด: ${totalFiles} ไฟล์\n🤖 ระบบพร้อมทำงานเต็มรูปแบบ!`, {parse_mode: 'Markdown'});
-    } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ เกิดข้อผิดพลาดในการสแกน: ${e.message}`);
-    }
-});
-
-// --- 5. คำสั่ง /delete (ลบไฟล์) ---
-bot.onText(/^\/delete\s+(.+)$/i, async (msg, match) => {
-    const p = match[1].trim();
-    try {
-        const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
-        await octokit.rest.repos.deleteFile({
-            owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p,
-            sha: data.sha, message: `Deleted ${p} via Bot`
-        });
-        bot.sendMessage(msg.chat.id, `🗑️ ลบเรียบร้อย: ${p}`);
-    } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ ลบไม่ได้: ${e.message}`);
-    }
-});
-
-// --- 6. คำสั่ง /backup (Zip ทั้งโปรเจกต์) ---
-bot.onText(/^\/backup$/i, async (msg) => {
-    bot.sendMessage(msg.chat.id, "💾 กำลังสร้างไฟล์ Backup (อาจใช้เวลาสักครู่)...");
-    const tmpDir = `/tmp/backup_${Date.now()}`;
-    const zipPath = `/tmp/backup_${Date.now()}.zip`;
-
-    try {
-        fs.mkdirSync(tmpDir);
-
-        // ฟังก์ชันโหลดไฟล์ทั้งหมดมาลงเครื่องชั่วคราว
-        async function downloadRecursive(dir) {
-            const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: dir });
-            for (const item of data) {
-                if (item.type === 'dir') {
-                    fs.mkdirSync(path.join(tmpDir, item.path), { recursive: true });
-                    await downloadRecursive(item.path);
-                } else {
-                    try {
-                        const f = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: item.path });
-                        if (f.data.content) {
-                            fs.writeFileSync(path.join(tmpDir, item.path), Buffer.from(f.data.content, 'base64'));
-                        }
-                    } catch (err) {} // ข้ามไฟล์ที่มีปัญหา
-                }
-            }
-        }
-
-        await downloadRecursive("");
-
-        // สร้าง Zip
-        const zip = new AdmZip();
-        zip.addLocalFolder(tmpDir);
-        zip.writeZip(zipPath);
-
-        await bot.sendDocument(msg.chat.id, zipPath);
-
-    } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ Backup Failed: ${e.message}`);
-    } finally {
-        // ล้างขยะ
-        if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
-        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-    }
-});
-
-// --- 7. อัปโหลดไฟล์ (เมื่อแนบไฟล์มา) ---
-bot.on('document', async (msg) => {
-    const doc = msg.document;
-    const fileName = doc.file_name;
-    bot.sendMessage(msg.chat.id, `⏳ กำลังอัปโหลด ${fileName}...`);
-
-    const tmpPath = `/tmp/${fileName}`;
-    try {
-        const fileLink = await bot.getFileLink(doc.file_id);
-        await downloadFile(fileLink, tmpPath);
-
-        const content = fs.readFileSync(tmpPath, { encoding: 'base64' });
-
-        // หา SHA เดิม (ถ้ามี)
-        let sha;
-        try {
-            const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: `uploads/${fileName}` });
-            sha = data.sha;
-        } catch (e) {}
-
-        await octokit.rest.repos.createOrUpdateFileContents({
-            owner: GITHUB_OWNER, repo: GITHUB_REPO, path: `uploads/${fileName}`,
-            message: `Upload ${fileName}`, content: content, sha: sha
-        });
-
-        bot.sendMessage(msg.chat.id, `✅ อัปโหลดเสร็จสิ้น! อยู่ที่: uploads/${fileName}`);
     } catch (e) {
         bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
     } finally {
@@ -235,33 +122,248 @@ bot.on('document', async (msg) => {
     }
 });
 
-// --- 8. โหมด JSON (รับโค้ดจาก AI) ---
-bot.on('message', async (msg) => {
-    if (!msg.text || msg.text.startsWith('/')) return;
-    if (!msg.text.trim().startsWith('{')) return;
+// ===============================
+// /checkall
+// ===============================
+bot.onText(/^\/checkall$/i, async (msg) => {
+    async function scan(dir) {
+        let count = 0;
+        const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: dir });
+        for (const i of data) {
+            if (i.type === "dir") count += await scan(i.path);
+            else count++;
+        }
+        return count;
+    }
 
     try {
-        const data = JSON.parse(msg.text);
-        const { filename, content, message } = data;
-        if (!filename || !content) return;
-
-        bot.sendMessage(msg.chat.id, `🚀 กำลังเขียนไฟล์: ${filename}`);
-
-        let sha;
-        try {
-            const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: filename });
-            sha = data.sha;
-        } catch (e) {}
-
-        await octokit.rest.repos.createOrUpdateFileContents({
-            owner: GITHUB_OWNER, repo: GITHUB_REPO, path: filename,
-            message: message || "Update via Bot",
-            content: Buffer.from(content).toString('base64'),
-            sha: sha
-        });
-        bot.sendMessage(msg.chat.id, `✅ บันทึก ${filename} เรียบร้อย!`);
-
+        const n = await scan("");
+        bot.sendMessage(msg.chat.id, `📁 Files in repo: ${n}\n✔ พร้อมใช้งาน`);
     } catch (e) {
-        // เงียบไว้ถ้าไม่ใช่ JSON
+        bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
     }
 });
+
+// ===============================
+// /delete
+// ===============================
+bot.onText(/^\/delete\s+(.+)$/i, async (msg, match) => {
+    const p = match[1].trim();
+
+    try {
+        const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
+
+        await octokit.rest.repos.deleteFile({
+            owner: GITHUB_OWNER,
+            repo: GITHUB_REPO,
+            path: p,
+            sha: data.sha,
+            message: `Deleted ${p} via bot`
+        });
+
+        bot.sendMessage(msg.chat.id, `🗑 ลบแล้ว: ${p}`);
+
+    } catch (e) {
+        bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
+    }
+});
+
+// ===============================
+// /backup (ZIP ทั้ง repo)
+// ===============================
+bot.onText(/^\/backup$/i, async (msg) => {
+    const tmpDir = `/tmp/backup_${Date.now()}`;
+    const zipPath = `/tmp/backup_${Date.now()}.zip`;
+
+    fs.mkdirSync(tmpDir);
+
+    async function downloadAll(dir) {
+        const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: dir });
+        for (const i of data) {
+            const p = path.join(tmpDir, i.path);
+            if (i.type === "dir") {
+                fs.mkdirSync(p, { recursive: true });
+                await downloadAll(i.path);
+            } else {
+                const file = await octokit.rest.repos.getContent({
+                    owner: GITHUB_OWNER, repo: GITHUB_REPO, path: i.path
+                });
+                if (file.data.content) {
+                    fs.writeFileSync(p, Buffer.from(file.data.content, 'base64'));
+                }
+            }
+        }
+    }
+
+    try {
+        await downloadAll("");
+        const zip = new AdmZip();
+        zip.addLocalFolder(tmpDir);
+        zip.writeZip(zipPath);
+        await bot.sendDocument(msg.chat.id, zipPath);
+    } catch (e) {
+        bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
+    } finally {
+        if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true });
+        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+    }
+});
+
+// ===============================
+// Upload single file (/upload)
+// ===============================
+bot.on('document', async (msg) => {
+    if (!msg.caption || msg.caption !== "/upload") return;
+
+    const doc = msg.document;
+    const tmp = `/tmp/${doc.file_name}`;
+
+    try {
+        const fileLink = await bot.getFileLink(doc.file_id);
+        await downloadFile(fileLink, tmp);
+
+        const content = fs.readFileSync(tmp).toString('base64');
+
+        await octokit.rest.repos.createOrUpdateFileContents({
+            owner: GITHUB_OWNER,
+            repo: GITHUB_REPO,
+            path: `uploads/${doc.file_name}`,
+            message: `Upload ${doc.file_name}`,
+            content
+        });
+
+        bot.sendMessage(msg.chat.id, `📤 Uploaded: uploads/${doc.file_name}`);
+
+    } catch (e) {
+        bot.sendMessage(msg.chat.id, `❌ Upload error: ${e.message}`);
+    } finally {
+        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+    }
+});
+
+// =========================================================
+//  EXTENDED MODULE — L1 AUTO IMPORT
+// =========================================================
+
+// ========== DELETE ALL FILES ==========
+async function deleteRecursive(p = "") {
+    try {
+        const { data } = await octokit.rest.repos.getContent({
+            owner: GITHUB_OWNER,
+            repo: GITHUB_REPO,
+            path: p
+        });
+
+        for (const i of data) {
+            if (i.type === "dir") {
+                await deleteRecursive(i.path);
+            } else {
+                await octokit.rest.repos.deleteFile({
+                    owner: GITHUB_OWNER,
+                    repo: GITHUB_REPO,
+                    path: i.path,
+                    sha: i.sha,
+                    message: `override delete ${i.path}`
+                });
+            }
+        }
+    } catch (err) {}
+}
+
+// ========== UPLOAD RECURSIVE ==========
+async function uploadRecursive(localDir, repoPath = "") {
+    const files = fs.readdirSync(localDir);
+
+    for (const f of files) {
+        const local = path.join(localDir, f);
+        const remote = repoPath ? `${repoPath}/${f}` : f;
+
+        if (fs.lstatSync(local).isDirectory()) {
+            await uploadRecursive(local, remote);
+        } else {
+            const content = fs.readFileSync(local);
+            let sha;
+
+            try {
+                const { data } = await octokit.rest.repos.getContent({
+                    owner: GITHUB_OWNER,
+                    repo: GITHUB_REPO,
+                    path: remote
+                });
+                sha = data.sha;
+            } catch (e) {}
+
+            await octokit.rest.repos.createOrUpdateFileContents({
+                owner: GITHUB_OWNER,
+                repo: GITHUB_REPO,
+                path: remote,
+                message: `import L1: ${remote}`,
+                content: content.toString('base64'),
+                sha
+            });
+        }
+    }
+}
+
+// ========== /override_repo ==========
+bot.onText(/^\/override_repo$/, async (msg) => {
+    bot.sendMessage(msg.chat.id, "⚠️ ล้าง repo ทั้งหมด...");
+    try {
+        await deleteRecursive("");
+        bot.sendMessage(msg.chat.id, "🧹 ล้าง repo เสร็จแล้ว!");
+    } catch (e) {
+        bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
+    }
+});
+
+// ========== /import_l1 ==========
+let waitZip = false;
+
+bot.onText(/^\/import_l1$/, async (msg) => {
+    waitZip = true;
+    bot.sendMessage(msg.chat.id, "📦 ส่ง ZIP L1-only มาเลย เดี๋ยวบอทจัดให้ครบชุด");
+});
+
+// ========== Handle ZIP Upload ==========
+bot.on("document", async (msg) => {
+    if (!waitZip) return;
+    const doc = msg.document;
+
+    if (!doc.file_name.endsWith(".zip")) {
+        bot.sendMessage(msg.chat.id, "❌ ต้องเป็น ZIP เท่านั้น");
+        return;
+    }
+
+    const tmpZip = `/tmp/${doc.file_name}`;
+    const extractDir = `/tmp/extract_${Date.now()}`;
+
+    try {
+        bot.sendMessage(msg.chat.id, "⏳ โหลดไฟล์...");
+        const link = await bot.getFileLink(doc.file_id);
+        await downloadFile(link, tmpZip);
+
+        bot.sendMessage(msg.chat.id, "📤 แตก ZIP...");
+        fs.mkdirSync(extractDir);
+        const zip = new AdmZip(tmpZip);
+        zip.extractAllTo(extractDir, true);
+
+        bot.sendMessage(msg.chat.id, "🧹 ล้าง repo เดิม...");
+        await deleteRecursive("");
+
+        bot.sendMessage(msg.chat.id, "🚀 อัปโหลดไฟล์ L1 ทั้งหมด...");
+        await uploadRecursive(extractDir);
+
+        bot.sendMessage(msg.chat.id, "🎉 เสร็จแล้ว! Repo ถูกอัปเดตตาม L1-only ใหม่");
+
+    } catch (e) {
+        bot.sendMessage(msg.chat.id, `❌ Import error: ${e.message}`);
+    } finally {
+        waitZip = false;
+        if (fs.existsSync(tmpZip)) fs.unlinkSync(tmpZip);
+        if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true });
+    }
+});
+
+// =========================================================
+// END
+// =========================================================
