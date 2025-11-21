@@ -50,27 +50,27 @@ const downloadFile = (url, dest) => {
 // ===============================
 // /help
 // ===============================
-bot.onText(/^\/help$/i, (msg) => {
+bot.onText(/^\/(help|ช่วยเหลือ)$/i, (msg) => {
     const helpMsg = `
 🤖 **Kryp Dev Bot (v12) Commands**
 
 📂 **File Management**
-/list [path]
-/read <file>
-/delete <file>
-/move <old> <new>
-/mkdir <folder>
+/list [path] หรือ /รายการ [path] - ดูรายชื่อไฟล์
+/read <file> หรือ /อ่าน <file> - อ่านเนื้อหาไฟล์
+/delete <file> หรือ /ลบ <file> - ลบไฟล์
+/move <old> <new> หรือ /ย้าย <old> <new> - ย้าย/เปลี่ยนชื่อ
+/mkdir <folder> หรือ /สร้างโฟลเดอร์ <folder> - สร้างโฟลเดอร์
 
 🛠 **System**
-/checkall  
-/backup  
+/checkall หรือ /ตรวจสอบทั้งหมด
+/backup หรือ /สำรองข้อมูล
 
 📤 **Upload**
-/upload (แนบไฟล์)
+/upload หรือ /อัปโหลด (แนบไฟล์)
 
 🔥 **L1 Auto System**
-/override_repo  → ล้าง repo ทั้งอัน
-/import_l1      → ส่ง ZIP แล้ว import L1-only อัตโนมัติ (ต้องแนบ ZIP หลังคำสั่ง)
+/override_repo หรือ /ล้างrepo → ล้าง repo ทั้งอัน
+/import_l1 หรือ /นำเข้าL1 → ส่ง ZIP แล้ว import L1-only อัตโนมัติ
 
 🤖 **AI JSON Writer**
 ส่ง JSON: {"filename":"..","content":".."}
@@ -79,10 +79,11 @@ bot.onText(/^\/help$/i, (msg) => {
 });
 
 // ===============================
-// /list
+// /list (รองรับภาษาไทย)
 // ===============================
-bot.onText(/^\/list(?:\s+(.+))?$/i, async (msg, match) => {
-    const p = (match && match[1]) ? match[1].trim() : "";
+bot.onText(/^\/(list|ดูไฟล์|รายการ)(?:\s+(.+))?$/i, async (msg, match) => {
+    // match[2] จะเป็น path ที่ตามมา (ถ้ามี)
+    const p = (match && match[2]) ? match[2].trim() : "";
 
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
@@ -100,12 +101,14 @@ bot.onText(/^\/list(?:\s+(.+))?$/i, async (msg, match) => {
 });
 
 // ===============================
-// /read (FIXED: Send as Document if long)
+// /read (รองรับภาษาไทย + FIX: Send as Document if long)
 // ===============================
-bot.onText(/^\/read\s+(.+)$/i, async (msg, match) => {
-    const p = match[1].trim();
-    bot.sendMessage(msg.chat.id, `📖 กำลังอ่าน: ${p}...`);
+bot.onText(/^\/(read|อ่าน)\s+(.+)$/i, async (msg, match) => {
+    const p = (match && match[2]) ? match[2].trim() : "";
+    if (!p) return bot.sendMessage(msg.chat.id, "❌ โปรดระบุชื่อไฟล์ที่ต้องการอ่าน");
 
+    bot.sendMessage(msg.chat.id, `📖 กำลังอ่าน: ${p}...`);
+    
     const tmpPath = path.join('/tmp', path.basename(p));
 
     try {
@@ -117,7 +120,7 @@ bot.onText(/^\/read\s+(.+)$/i, async (msg, match) => {
         const text = Buffer.from(data.content, 'base64').toString('utf8');
 
         if (text.length > 3000) {
-            // Send as Telegram Document for full content (FIXED)
+            // Send as Telegram Document for full content
             fs.writeFileSync(tmpPath, text);
             await bot.sendDocument(msg.chat.id, tmpPath, {
                 caption: `✅ แสดงผลไฟล์ไม่ครบในแชท: ${p} (ส่งเป็นเอกสารฉบับเต็ม)`
@@ -135,9 +138,9 @@ bot.onText(/^\/read\s+(.+)$/i, async (msg, match) => {
 });
 
 // ===============================
-// /checkall
+// /checkall (รองรับภาษาไทย)
 // ===============================
-bot.onText(/^\/checkall$/i, async (msg) => {
+bot.onText(/^\/(checkall|ตรวจสอบทั้งหมด)$/i, async (msg) => {
     async function scan(dir) {
         let count = 0;
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: dir });
@@ -157,10 +160,10 @@ bot.onText(/^\/checkall$/i, async (msg) => {
 });
 
 // ===============================
-// /delete
+// /delete (รองรับภาษาไทย)
 // ===============================
-bot.onText(/^\/delete\s+(.+)$/i, async (msg, match) => {
-    const p = match[1].trim();
+bot.onText(/^\/(delete|ลบ)\s+(.+)$/i, async (msg, match) => {
+    const p = match[2].trim();
 
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
@@ -181,9 +184,9 @@ bot.onText(/^\/delete\s+(.+)$/i, async (msg, match) => {
 });
 
 // ===============================
-// /backup (ZIP ทั้ง repo)
+// /backup (ZIP ทั้ง repo) (รองรับภาษาไทย)
 // ===============================
-bot.onText(/^\/backup$/i, async (msg) => {
+bot.onText(/^\/(backup|สำรองข้อมูล)$/i, async (msg) => {
     bot.sendMessage(msg.chat.id, "💾 กำลังสร้างไฟล์ Backup...");
     const tmpDir = `/tmp/backup_${Date.now()}`;
     const zipPath = `/tmp/backup_${Date.now()}.zip`;
@@ -274,8 +277,8 @@ async function uploadRecursive(localDir, repoPath = "") {
 // EXTENDED MODULES
 // ===============================
 
-// ========== /override_repo ==========
-bot.onText(/^\/override_repo$/, async (msg) => {
+// ========== /override_repo (รองรับภาษาไทย) ==========
+bot.onText(/^\/(override_repo|ล้างrepo)$/i, async (msg) => {
     bot.sendMessage(msg.chat.id, "⚠️ ล้าง repo ทั้งหมด...");
     try {
         await deleteRecursive("");
@@ -285,8 +288,8 @@ bot.onText(/^\/override_repo$/, async (msg) => {
     }
 });
 
-// ========== /import_l1 (START ZIP PROCESS) ==========
-bot.onText(/^\/import_l1$/, async (msg) => {
+// ========== /import_l1 (START ZIP PROCESS) (รองรับภาษาไทย) ==========
+bot.onText(/^\/(import_l1|นำเข้าL1)$/i, async (msg) => {
     waitZip = true;
     bot.sendMessage(msg.chat.id, "📦 ส่ง ZIP L1-only มาเลย เดี๋ยวบอทจัดให้ครบชุด");
 });
