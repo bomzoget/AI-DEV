@@ -16,7 +16,7 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
 const GITHUB_REPO = process.env.GITHUB_REPO;
 
-// Check ENV
+// เช็กค่าความถูกต้อง
 if (!TELEGRAM_TOKEN || !GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
     console.error("❌ Error: Missing ENV Variables in Railway!");
     process.exit(1);
@@ -105,19 +105,19 @@ bot.onText(/^\/list(?:\s+(.+))?$/i, async (msg, match) => {
 bot.onText(/^\/read\s+(.+)$/i, async (msg, match) => {
     const p = match[1].trim();
     bot.sendMessage(msg.chat.id, `📖 กำลังอ่าน: ${p}...`);
-    
-    const tmpPath = `/tmp/${path.basename(p)}`;
+
+    const tmpPath = path.join('/tmp', path.basename(p));
 
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
-        
+
         // Ensure content exists before conversion
         if (!data.content) throw new Error("ไฟล์ใหญ่เกินไป หรือเป็นไฟล์ Binary");
-        
+
         const text = Buffer.from(data.content, 'base64').toString('utf8');
 
         if (text.length > 3000) {
-            // Send as Telegram Document for full content
+            // Send as Telegram Document for full content (FIXED)
             fs.writeFileSync(tmpPath, text);
             await bot.sendDocument(msg.chat.id, tmpPath, {
                 caption: `✅ แสดงผลไฟล์ไม่ครบในแชท: ${p} (ส่งเป็นเอกสารฉบับเต็ม)`
@@ -129,6 +129,7 @@ bot.onText(/^\/read\s+(.+)$/i, async (msg, match) => {
     } catch (e) {
         bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
     } finally {
+        // CRITICAL FIX: Delete temporary file always
         if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
     }
 });
@@ -335,8 +336,7 @@ bot.on("document", async (msg) => {
     
     // --- LOGIC 2: Standard Upload (Default) ---
     
-    // Fallback: If not waiting for ZIP, treat as standard upload (must have /upload caption if security is strict)
-    // Here we treat it as standard upload if waitZip is false.
+    // Fallback: If not waiting for ZIP, treat as standard upload to 'uploads/' folder
     
     const tmp = `/tmp/${doc.file_name}`;
     try {
