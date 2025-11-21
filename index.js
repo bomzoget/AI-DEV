@@ -1,10 +1,6 @@
 /* ====================================================
    Kryp Ultimate AI Dev Bot v12 (Full Combine Version)
-   รวมโค้ดเดิม + เพิ่มฟีเจอร์ L1 Auto Import
-   Features:
-   - List, Read, Delete, Upload, Move, Backup
-   - override_repo (ล้างทั้ง repo)
-   - import_l1 (แตก ZIP + อัปโหลดทั้ง repo)
+   Features: List, Read, Write, Delete, Move, Upload, Backup, CheckAll
 ==================================================== */
 
 const TelegramBot = require('node-telegram-bot-api');
@@ -30,6 +26,11 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
 console.log("🤖 Kryp Bot v12 Started...");
+
+// ===============================
+// State Management for L1 Import
+// ===============================
+let waitZip = false; // State to track if bot is waiting for a ZIP file
 
 // ===============================
 // Helper: Download File
@@ -69,7 +70,7 @@ bot.onText(/^\/help$/i, (msg) => {
 
 🔥 **L1 Auto System**
 /override_repo  → ล้าง repo ทั้งอัน
-/import_l1      → ส่ง ZIP แล้ว import L1-only อัตโนมัติ
+/import_l1      → ส่ง ZIP แล้ว import L1-only อัตโนมัติ (ต้องแนบ ZIP หลังคำสั่ง)
 
 🤖 **AI JSON Writer**
 ส่ง JSON: {"filename":"..","content":".."}
@@ -99,20 +100,30 @@ bot.onText(/^\/list(?:\s+(.+))?$/i, async (msg, match) => {
 });
 
 // ===============================
-// /read
+// /read (FIXED: Send as Document if long)
 // ===============================
 bot.onText(/^\/read\s+(.+)$/i, async (msg, match) => {
     const p = match[1].trim();
+    bot.sendMessage(msg.chat.id, `📖 กำลังอ่าน: ${p}...`);
+    
     const tmpPath = `/tmp/${path.basename(p)}`;
 
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
+        
+        // Ensure content exists before conversion
+        if (!data.content) throw new Error("ไฟล์ใหญ่เกินไป หรือเป็นไฟล์ Binary");
+        
         const text = Buffer.from(data.content, 'base64').toString('utf8');
 
         if (text.length > 3000) {
+            // Send as Telegram Document for full content
             fs.writeFileSync(tmpPath, text);
-            await bot.sendDocument(msg.chat.id, tmpPath);
+            await bot.sendDocument(msg.chat.id, tmpPath, {
+                caption: `✅ แสดงผลไฟล์ไม่ครบในแชท: ${p} (ส่งเป็นเอกสารฉบับเต็ม)`
+            });
         } else {
+            // Send as Markdown code block
             bot.sendMessage(msg.chat.id, `\`\`\`\n${text}\n\`\`\``, { parse_mode: 'Markdown' });
         }
     } catch (e) {
@@ -172,6 +183,7 @@ bot.onText(/^\/delete\s+(.+)$/i, async (msg, match) => {
 // /backup (ZIP ทั้ง repo)
 // ===============================
 bot.onText(/^\/backup$/i, async (msg) => {
+    bot.sendMessage(msg.chat.id, "💾 กำลังสร้างไฟล์ Backup...");
     const tmpDir = `/tmp/backup_${Date.now()}`;
     const zipPath = `/tmp/backup_${Date.now()}.zip`;
 
@@ -210,67 +222,27 @@ bot.onText(/^\/backup$/i, async (msg) => {
 });
 
 // ===============================
-// Upload single file (/upload)
+// L1 Auto Import Helpers
 // ===============================
-bot.on('document', async (msg) => {
-    if (!msg.caption || msg.caption !== "/upload") return;
 
-    const doc = msg.document;
-    const tmp = `/tmp/${doc.file_name}`;
-
-    try {
-        const fileLink = await bot.getFileLink(doc.file_id);
-        await downloadFile(fileLink, tmp);
-
-        const content = fs.readFileSync(tmp).toString('base64');
-
-        await octokit.rest.repos.createOrUpdateFileContents({
-            owner: GITHUB_OWNER,
-            repo: GITHUB_REPO,
-            path: `uploads/${doc.file_name}`,
-            message: `Upload ${doc.file_name}`,
-            content
-        });
-
-        bot.sendMessage(msg.chat.id, `📤 Uploaded: uploads/${doc.file_name}`);
-
-    } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ Upload error: ${e.message}`);
-    } finally {
-        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
-    }
-});
-
-// =========================================================
-//  EXTENDED MODULE — L1 AUTO IMPORT
-// =========================================================
-
-// ========== DELETE ALL FILES ==========
+// Recursive delete helper (called by /override_repo and /import_l1)
 async function deleteRecursive(p = "") {
     try {
-        const { data } = await octokit.rest.repos.getContent({
-            owner: GITHUB_OWNER,
-            repo: GITHUB_REPO,
-            path: p
-        });
+        const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: p });
 
         for (const i of data) {
             if (i.type === "dir") {
                 await deleteRecursive(i.path);
             } else {
                 await octokit.rest.repos.deleteFile({
-                    owner: GITHUB_OWNER,
-                    repo: GITHUB_REPO,
-                    path: i.path,
-                    sha: i.sha,
-                    message: `override delete ${i.path}`
+                    owner: GITHUB_OWNER, repo: GITHUB_REPO, path: i.path, sha: i.sha, message: `override delete ${i.path}`
                 });
             }
         }
     } catch (err) {}
 }
 
-// ========== UPLOAD RECURSIVE ==========
+// Recursive upload helper (called by /import_l1)
 async function uploadRecursive(localDir, repoPath = "") {
     const files = fs.readdirSync(localDir);
 
@@ -285,25 +257,21 @@ async function uploadRecursive(localDir, repoPath = "") {
             let sha;
 
             try {
-                const { data } = await octokit.rest.repos.getContent({
-                    owner: GITHUB_OWNER,
-                    repo: GITHUB_REPO,
-                    path: remote
-                });
+                const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: remote });
                 sha = data.sha;
             } catch (e) {}
 
             await octokit.rest.repos.createOrUpdateFileContents({
-                owner: GITHUB_OWNER,
-                repo: GITHUB_REPO,
-                path: remote,
-                message: `import L1: ${remote}`,
-                content: content.toString('base64'),
-                sha
+                owner: GITHUB_OWNER, repo: GITHUB_REPO, path: remote, message: `import L1: ${remote}`,
+                content: content.toString('base64'), sha
             });
         }
     }
 }
+
+// ===============================
+// EXTENDED MODULES
+// ===============================
 
 // ========== /override_repo ==========
 bot.onText(/^\/override_repo$/, async (msg) => {
@@ -316,54 +284,114 @@ bot.onText(/^\/override_repo$/, async (msg) => {
     }
 });
 
-// ========== /import_l1 ==========
-let waitZip = false;
-
+// ========== /import_l1 (START ZIP PROCESS) ==========
 bot.onText(/^\/import_l1$/, async (msg) => {
     waitZip = true;
     bot.sendMessage(msg.chat.id, "📦 ส่ง ZIP L1-only มาเลย เดี๋ยวบอทจัดให้ครบชุด");
 });
 
-// ========== Handle ZIP Upload ==========
+
+// ========== Handle DOCUMENT Upload (Combined Logic) ==========
 bot.on("document", async (msg) => {
-    if (!waitZip) return;
     const doc = msg.document;
 
-    if (!doc.file_name.endsWith(".zip")) {
-        bot.sendMessage(msg.chat.id, "❌ ต้องเป็น ZIP เท่านั้น");
-        return;
+    // --- LOGIC 1: L1 Auto Import (ZIP) ---
+    if (waitZip) {
+        if (!doc.file_name.endsWith(".zip")) {
+            bot.sendMessage(msg.chat.id, "❌ ต้องเป็น ZIP เท่านั้น");
+            return;
+        }
+
+        const tmpZip = `/tmp/${doc.file_name}`;
+        const extractDir = `/tmp/extract_${Date.now()}`;
+        
+        try {
+            bot.sendMessage(msg.chat.id, "⏳ โหลดไฟล์...");
+            const link = await bot.getFileLink(doc.file_id);
+            await downloadFile(link, tmpZip);
+
+            bot.sendMessage(msg.chat.id, "📤 แตก ZIP...");
+            fs.mkdirSync(extractDir);
+            const zip = new AdmZip(tmpZip);
+            zip.extractAllTo(extractDir, true);
+
+            bot.sendMessage(msg.chat.id, "🧹 ล้าง repo เดิม...");
+            await deleteRecursive("");
+
+            bot.sendMessage(msg.chat.id, "🚀 อัปโหลดไฟล์ L1 ทั้งหมด...");
+            await uploadRecursive(extractDir);
+
+            bot.sendMessage(msg.chat.id, "🎉 เสร็จแล้ว! Repo ถูกอัปเดตตาม L1-only ใหม่");
+
+        } catch (e) {
+            bot.sendMessage(msg.chat.id, `❌ Import error: ${e.message}`);
+        } finally {
+            waitZip = false;
+            if (fs.existsSync(tmpZip)) fs.unlinkSync(tmpZip);
+            if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });
+        }
+        return; // Exit after handling L1 Import
     }
-
-    const tmpZip = `/tmp/${doc.file_name}`;
-    const extractDir = `/tmp/extract_${Date.now()}`;
-
+    
+    // --- LOGIC 2: Standard Upload (Default) ---
+    
+    // Fallback: If not waiting for ZIP, treat as standard upload (must have /upload caption if security is strict)
+    // Here we treat it as standard upload if waitZip is false.
+    
+    const tmp = `/tmp/${doc.file_name}`;
     try {
-        bot.sendMessage(msg.chat.id, "⏳ โหลดไฟล์...");
-        const link = await bot.getFileLink(doc.file_id);
-        await downloadFile(link, tmpZip);
+        const fileLink = await bot.getFileLink(doc.file_id);
+        await downloadFile(fileLink, tmp);
 
-        bot.sendMessage(msg.chat.id, "📤 แตก ZIP...");
-        fs.mkdirSync(extractDir);
-        const zip = new AdmZip(tmpZip);
-        zip.extractAllTo(extractDir, true);
+        const content = fs.readFileSync(tmp).toString('base64');
 
-        bot.sendMessage(msg.chat.id, "🧹 ล้าง repo เดิม...");
-        await deleteRecursive("");
+        await octokit.rest.repos.createOrUpdateFileContents({
+            owner: GITHUB_OWNER,
+            repo: GITHUB_REPO,
+            path: `uploads/${doc.file_name}`,
+            message: `Upload ${doc.file_name}`,
+            content: content
+        });
 
-        bot.sendMessage(msg.chat.id, "🚀 อัปโหลดไฟล์ L1 ทั้งหมด...");
-        await uploadRecursive(extractDir);
-
-        bot.sendMessage(msg.chat.id, "🎉 เสร็จแล้ว! Repo ถูกอัปเดตตาม L1-only ใหม่");
+        bot.sendMessage(msg.chat.id, `📤 Uploaded: uploads/${doc.file_name}`);
 
     } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ Import error: ${e.message}`);
+        bot.sendMessage(msg.chat.id, `❌ Upload error: ${e.message}`);
     } finally {
-        waitZip = false;
-        if (fs.existsSync(tmpZip)) fs.unlinkSync(tmpZip);
-        if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true });
+        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
     }
 });
 
-// =========================================================
-// END
-// =========================================================
+
+// ===============================
+// AI JSON Writer
+// ===============================
+bot.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+    if (!msg.text.trim().startsWith('{')) return;
+
+    try {
+        const data = JSON.parse(msg.text);
+        const { filename, content, message } = data;
+        if (!filename || !content) return;
+
+        bot.sendMessage(msg.chat.id, `🚀 กำลังเขียนไฟล์: ${filename}`);
+
+        let sha;
+        try {
+            const { data } = await octokit.rest.repos.getContent({ owner: GITHUB_OWNER, repo: GITHUB_REPO, path: filename });
+            sha = data.sha;
+        } catch (e) {}
+
+        await octokit.rest.repos.createOrUpdateFileContents({
+            owner: GITHUB_OWNER, repo: GITHUB_REPO, path: filename,
+            message: message || "Update via Bot",
+            content: Buffer.from(content).toString('base64'),
+            sha: sha
+        });
+        bot.sendMessage(msg.chat.id, `✅ บันทึก ${filename} เรียบร้อย!`);
+
+    } catch (e) {
+        // เงียบไว้ถ้าไม่ใช่ JSON
+    }
+});
